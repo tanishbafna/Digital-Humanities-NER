@@ -1,0 +1,609 @@
+---
+title: 'The Merchants are in Business: A Comedy'
+author: "Aditi K Prasad, Aranya Rathore, Tanish Bafna, Varnika Gangavalli"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    df_print: paged
+---
+
+<br/>
+
+### Introduction
+
+Our group is interested in looking at how the emerging merchant class in the restoration era (1660-1700s) exerted its presence in the literature, especially plays, of the time. Restoration literature was written in celebration of Charles II being restored to the throne.We want to examine whether there’s a connection between how characters are portrayed (positively or negatively) and their occupation to get a sense of how the merchant class is treated by the authors of the plays selected. Looking at how locations outside of England, especially places which were involved in trade, are portrayed might also give insight into how this emerging class was present in texts that celebrated the Stuart Line. A comparison between early and late restoration plays will give us an idea on how the attitude towards the merchant class changed over this period.
+\
+\
+
+### Research Hypothesis
+
+The rise of the merchant class is seen to be increasingly positive over the restoration period.
+\
+\
+
+### Our Corpus 
+
+Before we introduce the corpus, let's get started by importing all the necessary libraries and scripts.
+
+```{r}
+#NLP Libraries
+library(rJava)
+library(openNLP)
+library(NLP)
+library(syuzhet)
+
+#Tidy data manipulation
+library(stringr)
+library(dplyr)
+library(tidyr)
+library(tidytext)
+library(readr)
+library(stringi)
+
+#Corpus ingest
+library(gutenbergr)
+
+#Helper library
+library(fuzzyjoin)
+
+#Graphics library
+library(ggiraphExtra)
+library(ggplot2)
+library(RColorBrewer)
+library(scales)
+
+source("testMirrors.r")
+good_mirror <- findMirror()
+```
+
+<br/>
+
+We decided to take Aranya’s corpus from the previous assignment while adding some new eBooks from Gutenberg. The corpus consists of ten plays from the restoration era that were published over a period of forty years. We selected two plays written by Aphra Behn: The Dutch Lover (1673); and The Roundheads (1682). Amboyna (1673) and Aureng-zebe (1675), two plays written by John Dryden are also part of the corpus. The following plays in the corpus were written by William Wycherley, both published in the 1670s. The plays are— The Plain Dealer (1676) and The Gentleman Dancing-Master (1672). Later works from this period include Otway’s Venice Preserv’d (1682); Congreve’s Love for Love (1695) and The Way of the World (1700); and finally Farquhar’s The Recruiting Officer (1706). The corpus was created to suit our interest in studying the rich political context of the time and how heavily it might have influenced the literature.
+\
+\
+
+Here's a final list of the selected texts:
+
+- *Love for Love: A Comedy - Congreve*
+- *The Way of the World - Congreve*
+- *The Recruiting Officer - Farquhar*
+- *Venice Preserv'd - Otway*
+- *The Gentleman-Dancing Mater - Wycherley*
+- *The Plain Dealer - Wycherley*
+- *Amboyna - Dryden*
+- *Aureng-zebe - Dryden*
+- *The Dutch Lover - Behn*
+- *The Roundheads - Behn*
+\
+\
+
+Since the last 6 in the list are found only in volumes on Gutenberg, we will first download their text files and then seperate the volumes using a little bit of Python and RegEx. Additionally here are some functions which can read these text files into dataframes with the necessary columns.
+
+```{r}
+readTextCorpus <- function(fileName, bookName, authorName) {
+  
+  out <- read.delim(fileName, header=FALSE, blank.lines.skip=FALSE, stringsAsFactors = FALSE, quote = "")
+  colnames(out) <- "text"
+  out <- mutate(out, author = authorName, title = bookName) #Adding Book and Author Column
+  
+}
+
+#=========================
+
+loadIntoCorpus <- function() {
+  
+  behn1<- readTextCorpus("text_(dutch_lover).txt", "The Dutch Lover", "Behn, Aphra")
+  behn2<- readTextCorpus("text_(roundheads).txt", "The Roundheads", "Behn, Aphra")
+  
+  dryden1<- readTextCorpus("text_(amboyna).txt", "Amboyna", "Dryden, John")
+  dryden2<- readTextCorpus("text_(aureng-zebe).txt", "Aureng-Zebe", "Dryden, John")
+  
+  wycherley1<- readTextCorpus("text_(gentleman_dancing).txt", "The Gentlemen Dancing-Master", "Wycherley, William")
+  wycherley2<- readTextCorpus("text_(plain_dealer).txt", "The Plain Dealer", "Wycherley, William")
+  
+  # Combining dataframes.
+  corpusDF <- rbind(behn1, behn2, dryden1, dryden2, wycherley1, wycherley2)
+  
+  return(corpusDF)
+  
+}
+```
+
+<br/>
+
+Now let's download the Gutenberg bit of our corpus and load in our text files seperately. Once this is done we can merge both dataframes and delete all unnecessary variables.
+
+```{r}
+# First 4 texts
+corpus_first4 <- gutenberg_download(c(1244,1292,37012,30934), mirror=good_mirror, meta_fields = c("author","title"))
+corpus_first4$gutenberg_id <- NULL
+
+# Last 6 texts
+corpus_last6 <- loadIntoCorpus()
+
+corpus <- rbind(corpus_first4, corpus_last6)
+rm(corpus_first4, corpus_last6)
+```
+
+<br/>
+
+#### Clean the data
+
+If you search for "_" in the corpus, a number of words like `_Don_` come up. These strings generally specify a formatting style such as Italics. Presumably there are other such errors in these texts. So before moving ahead, let's just get rid of all known bad strings.
+
+```{r}
+corpus_clean <- corpus %>%
+                mutate(text = str_replace_all(text,"_"," "))
+```
+
+<br/>
+
+#### Priming for NLP
+
+Checkpoint 1 — a comparitively clean corpus ready for analysis — completed. We now have to prime the data for our NLP pipeline. The package does not like working with tables, therefore we have to feed all of the text into a **String** - a special data type in the NLP library. Still, as we want to retain the book titles we need to make some modifications. We first want to collapse all the text into one cell by book. Then we want to convert that cell to a list that will hold the String object
+
+```{r}
+corpus_text <- corpus_clean %>%
+  group_by(title) %>%
+  mutate(text = paste(as.character(text), collapse = " ")) %>%
+  distinct() %>%
+  ungroup()
+
+corpus_text_str <- corpus_text %>%
+  group_by(title) %>%
+  mutate(text = list(as.String(text)))
+
+#set pipeline
+wordAnnotator <- Maxent_Word_Token_Annotator(language = "en")
+sentenceAnnotator <- Maxent_Sent_Token_Annotator(language = "en")
+characterAnnotatorEN <- Maxent_Entity_Annotator(language = "en", kind = "person")
+locationAnnotatorEN <- Maxent_Entity_Annotator(language = "en", kind = "location")
+
+pipeline <- list(sentenceAnnotator,
+                 wordAnnotator,
+                 characterAnnotatorEN,
+                 locationAnnotatorEN)
+```
+
+<br/>
+
+#### Chunking and extracting entities
+
+The previously created `extract_entities` function relied on the user passing in a String. Now we are passing in a data frame with a nested String object. We will use a double `for` loop in which the first loop runs through each `title` in the data frame and chunks it up into different sections and returns the extracted entities with the title and author in tact.
+
+
+```{r}
+#create empty df
+full_df = as.data.frame(NULL)
+chunk_size = 10000
+
+for (j in 1:nrow(corpus_text_str)) {
+  #get number of chunks
+  chunk <- nchar(corpus_text_str$text[j]) %/% chunk_size
+  text <- unlist(corpus_text_str$text[j])
+  text <- as.String(text)
+  
+  #Loop runs through the text section by section and reads each chunk into a df
+  
+  for (i in 1:chunk) {
+    print(paste0(
+      "Processing title: ",
+      corpus_text_str$title[j],
+      " - section ",
+      i,
+      " of ",
+      chunk
+    ))
+    temp_df = NULL
+    
+    if (i == 1) {
+      m = 1
+    }
+    
+    if (i == chunk) {
+      m = n + 1
+      n = (nchar(text))
+    }
+    else{
+      n <- m + chunk_size
+    }
+    
+    temp_string = text[m, n]
+    
+    temp_ann <- NLP::annotate(temp_string, pipeline)
+    
+    temp_df <-  temp_ann %>%
+      as.data.frame %>% 
+      filter(type != "word")
+    
+    temp_df <- temp_df %>%
+      mutate(words = str_sub(
+        as.character(temp_string),
+        start = temp_df$start,
+        end = temp_df$end
+      )) %>%
+      unnest_wider(features)
+    
+    temp_df <- temp_df %>%
+      mutate(author = corpus_text_str$author[j], title = corpus_text_str$title[j]) 
+      #This is where you would include your added variable
+      
+    
+    #stitch it all together
+    full_df <- full_df %>%
+      bind_rows(temp_df)
+    
+    m <- m + chunk_size
+  }
+}
+
+```
+
+<br/>
+
+#### We are clean freaks
+
+We don't want entities to be listed as different people or locations due to any trailing punctuations. For example, `Don Diego` and `Don Diego!` are one and the same. Let's scrub this by removing all punctuation from the retrieved entities list. Additionally, we don't like the way the columns are ordered right now, so let's do some quick reallocation as well.
+
+```{r}
+full_df <-  full_df %>%
+  mutate(words = str_remove_all(words, '[:punct:]'))
+
+full_df <- full_df %>% 
+          relocate(c("author","title"),.before = 1) %>% 
+          select(-id, -constituents) 
+
+head(full_df)
+```
+
+<br/>
+
+#### Appending locations in each sentence
+
+Now that we have annotated the text, the "entities" are all part of the df. Since the entities are "below" and the sentences are "above, we want to join the bottom part with the top part. There is no way to do this without first splitting up the table. Let's create two tables, one with sentences and one with entities.
+
+```{r}
+df1 <- full_df %>%
+  filter(type == "sentence") %>%
+  mutate(sentence_nr = row_number()) %>%
+  select(author, title, words, sentence_nr)
+
+df2 <-  full_df %>%
+  filter(type == "entity") %>%
+  mutate(record = row_number()) %>% 
+  select(author, title, words, kind) %>% 
+  distinct()  
+```
+
+<br/>
+
+#### Some more joining and cleaning
+
+Now that we have two separate tables we can rejoin them. We will place the *entities* in *sentences* based on whether the word is detected in the sentence. 
+
+
+```{r}
+pre_join <- df2
+
+pre_join <- pre_join %>% 
+              select(words, kind)
+
+full_join_df <- fuzzy_join(df1, pre_join, match_fun = stri_detect_regex, by = "words", mode = "inner")
+
+full_join_df <- full_join_df %>% 
+                  distinct()
+
+full_join_df_clean <-  full_join_df %>%
+  rename_at(.vars = vars(ends_with(".x")),
+            .funs = funs(sub("[.]x$", "", .))) %>%
+  rename(entity = words.y)
+```
+
+
+<br/>
+
+### Corpus Summary
+
+We will begin this section by prepping our table for sentiment analysis and carrying out various visualization functions along the way.
+\
+\
+
+#### Cleaning and Appending Information
+
+We currently have sentiment per sentence and the entities located in those sentences. The problem is that that the entities are actually a bit distorted. Some are actually duplicates, some are not entities at all. Before we make the final tally, we have to manually scrub the data set using Microsoft Excel. 
+
+Also since our analysis is a bit time based, we will mention the years of first publication and performance along with the titles.
+
+
+```{r}
+clean_entities <- read.csv("backup_(final_entities).csv", stringsAsFactors = FALSE)
+
+clean_entities$year[clean_entities$title == "The Dutch Lover"] <- "1673"
+clean_entities$year[clean_entities$title == "The Plain Dealer"] <- "1676"
+clean_entities$year[clean_entities$title == "The Gentlemen Dancing-Master"] <- "1673"
+clean_entities$year[clean_entities$title == "The Recruiting Officer"] <- "1706"
+clean_entities$year[clean_entities$title == "The Roundheads"] <- "1682"
+clean_entities$year[clean_entities$title == "The Way of the World"] <- "1700"
+clean_entities$year[clean_entities$title == "Venice Preserved: A Tragedy"] <- "1682"
+clean_entities$year[clean_entities$title == "Amboyna"] <- "1673"
+clean_entities$year[clean_entities$title == "Love for Love: A Comedy"] <- "1695"
+clean_entities$year[clean_entities$title == "Aureng-Zebe"] <- "1675"
+
+clean_entities$title[clean_entities$title == "The Dutch Lover"] <- "The Dutch Lover - 1673"
+clean_entities$title[clean_entities$title == "The Plain Dealer"] <- "The Plain Dealer - 1676"
+clean_entities$title[clean_entities$title == "The Gentlemen Dancing-Master"] <- "The Gentlemen Dancing-Master - 1673"
+clean_entities$title[clean_entities$title == "The Recruiting Officer"] <- "The Recruiting Officer - 1706"
+clean_entities$title[clean_entities$title == "The Roundheads"] <- "The Roundheads - 1682"
+clean_entities$title[clean_entities$title == "The Way of the World"] <- "The Way of the World - 1700"
+clean_entities$title[clean_entities$title == "Venice Preserved: A Tragedy"] <- "Venice Preserved - 1682"
+clean_entities$title[clean_entities$title == "Amboyna"] <- "Amboyna - 1673"
+clean_entities$title[clean_entities$title == "Love for Love: A Comedy"] <- "Love for Love - 1695"
+clean_entities$title[clean_entities$title == "Aureng-Zebe"] <- "Aureng-Zebe - 1675"
+
+head(clean_entities)
+
+```
+
+<br/>
+
+#### Character Occurrences
+
+Now that we have a clean dataframe with all captured entities, we can observe the most active characters in every text.
+
+```{r message=FALSE, fig.width=12, fig.height=8}
+
+# Calculating total occurences of a character.
+occurences <- clean_entities %>% count(title, kind, entity)
+
+occurences %>%
+  group_by(title) %>%
+  filter(kind == "person") %>%
+  top_n(10) %>% 
+  mutate(entity = reorder(entity, n)) %>%
+  ggplot(aes(entity, y = n, fill = title)) +
+  geom_col() +
+  facet_wrap( ~ title, scales = "free") +
+  ggtitle("Top 10 Mentions (Characters)") +
+  coord_flip()
+```
+
+<br/>
+
+#### Length of Plays
+
+To gether some statistical info on the length of the plays, let us plot the total words used in each text.
+
+```{r}
+unnest_corpus <- corpus_clean %>%
+  unnest_tokens(word, text)
+
+# Calculating total words in a text
+wordCount <- unnest_corpus %>%
+  count(title)
+colnames(wordCount) <- c("title", "totalWords")
+
+ggplot(wordCount, aes(x = title, y = totalWords, fill = title)) +
+  geom_col() +
+  ggtitle("Length of Plays") + 
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+```
+
+<br/>
+
+#### Word Frequency
+
+Another attempt at gaining insight from the frequency of particular words, we can map out the most positive and negative words that show up in our corpus of Restoration Literature. What about most frequently occuring words with no positive-negatve filter? 
+
+```{r}
+# Top 10 + and - words.
+
+bing_word_counts <- unnest_corpus %>%
+  inner_join(get_sentiments("bing")) %>% 
+  count(word, sentiment, sort = TRUE) %>%
+  ungroup()
+
+bing_word_counts %>%
+  group_by(sentiment) %>%
+  top_n(10) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(y = "Contribution to sentiment",
+       x = NULL) +
+  ggtitle("Top 10 +- Words") +
+  coord_flip()
+
+```
+
+
+```{r}
+# Top 10 words in restoration literature.
+
+# Anti-joining stop words
+word_freq <- unnest_corpus %>%
+  anti_join(stop_words, by = c("word" = "word")) %>%
+  filter(!(word %in% c("thee", "thou", "i'll", "nay", "tis", "ha", "enter", "exit", "scene", "act", "em", "mons", "thy") )) %>%
+  count(word, sort = TRUE) %>%
+  ungroup()
+
+word_freq %>%
+  mutate(word = reorder(word, n)) %>%
+  top_n(10) %>%
+  ggplot(aes(x = word, y = n, fill = word)) +
+    geom_col() +
+    ggtitle("Most frequent words") + 
+    theme(axis.title.x=element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks.x=element_blank())
+```
+
+<br/>
+
+The length of all the plays in the corpus are between 20,000 and 45,000 words. The most frequent words that indicate a positive sentiment are love, like, good, great, free and so on. Words like love (word count 750+) are prominent presumably because of the racy romance subplots in restoration literature. The top negative words came out to be poor, fear, death, die and so on. We observed words like sir (word count 1500+), madam (word count 500+) and  (word count 300+) appearing frequently, which could be because most of the characters are nobility or upper-class, and are referred to by their titles. In the plots for most mentioned characters, central female characters are prominent: Isabinda in Amboyna, Indamora in Aureng-zebe, Angelica in Love for Love, Sylvia and Lucy in The Recruiting Officer, and Olivia in The Plain Dealer. As mentioned earlier, restoration plays have bawdy comedy as well as prominent romance plots. The high mention of women characters is also possible because of the Oedipal conflict between fathers and sons as romantic rivals (ex; In Aureng-zebe where the Emperor and Aureng-zebe fight over Indamora) in most restoration dramas.
+
+<br/>
+
+### NLP, NER and Sentiment Analysis
+
+Our combination of DH tools for this assignment will be NLP, NER and Sentiment Analysis. But before we move forward with the visualizations we have to unnest the sentences, and get a view of the words that "surround" the entities. We can once again run our "bing" sentiment analysis and attach several columns of values to this table. First, we create a separate table of sentiments by sentence and then recombine the columns of sentiments with the original entities, and drop the repeat values.
+
+```{r message=FALSE}
+
+entities_unnest <- clean_entities %>%
+  unnest_tokens(word, words)
+
+entities_sentiment <- entities_unnest %>%
+  group_by(author, title) %>%
+  inner_join(get_sentiments("nrc")) %>% 
+  count(sentence_nr, sentiment) %>%
+  spread(sentiment, n, fill = 0) %>%
+  mutate(sentiment = positive - negative)
+
+entities_matches_sentiment <- entities_unnest %>%
+  inner_join(entities_sentiment) %>%
+  distinct_at(vars(-word)) %>%
+  left_join(occurences, by=c("title", "entity", "kind"))
+
+ner_total_sentiment <- entities_matches_sentiment %>% 
+                           group_by(author, title, entity, kind, year) %>%  
+                           summarise(total = mean(sentiment))  
+
+```
+
+<br/>
+
+## Data Visualization 1
+\
+
+#### Top 10 Locations
+
+The `ner_total_sentiment` dataframe allows us to chart the top 10 locations based on their positive and negative sentiments. 
+\
+\
+
+##### Positive Locations
+
+```{r message=FALSE, fig.width=12, fig.height=8}
+
+ner_total_sentiment %>%
+  group_by(title) %>%
+  filter(kind == "location") %>%
+   top_n(10) %>% 
+ mutate(entity = reorder(entity, (desc(total)))) %>%  
+  ggplot(aes(entity, y = total, fill = title)) +
+  geom_col() +
+  facet_wrap( ~ title, scales = "free") +
+  ggtitle("Top 10 Positive (Locations)") +
+  coord_flip()
+
+```
+\
+
+##### Negative Locations
+
+```{r message=FALSE, fig.width=12, fig.height=8}
+
+ner_total_sentiment %>%
+  group_by(title) %>%
+  filter(kind == "location") %>%
+   top_n(-10) %>% 
+ mutate(entity = reorder(entity, (desc(total)))) %>%  
+  ggplot(aes(entity, y = total, fill = title)) +
+  geom_col() +
+  facet_wrap( ~ title, scales = "free") +
+  ggtitle("Top 10 Negative (Locations)") +
+  coord_flip()
+
+```
+
+<br/>
+
+We mapped the top 10 positive as well as negative locations across our corpus. Locations outside England had positive sentiments connected to them. India was a positive location in the following plays arranged in order of publication: Amboyna (positive factor 6); Aureng-zebe (positive factor 2.5); The Plain Dealer (positive factor 2); The Way of the World (positive factor 1); and The Recruiting Officer (positive factor 6.5). Trade between England and India was flourishing in the restoration era through the East India Company. India as a positive location reflects this beneficial trade relationship, especially in plays like Amboyna whose plot explicitly revolves around overseas trade rivalry with the Dutch. ‘Sea’ being a positive location in two plays--Amboyna (positive factor 2) and The Roundheads (positive factor 7.5), both of which revolve around trade politics, adds to this conclusion. Spain is a positive location in 4 plays; this could be a result of England’s improving trade relationship with Spain after the restoration of Charles II. London being a positive location in 5 plays also reflects growing nationalism around trade in England at the time.
+
+<br/>
+
+#### Drawbacks
+
+One would expect France to be a consistently negative location considering the fierce trade rivalry between England and France in the Restoration era. However, France shows up as a positive location in 4 plays and a negative location in only 2 plays. There’s also no clear reason as to why London shows up as a negative location in 3 plays. Generic places like ‘garden’, ‘world’, ‘hemisphere’ and names of planets showing up on the mapping wasn’t helpful. While the positive/negative analysis does support our thesis to an extent, we didn’t observe a change in pattern between early and late restoration period. Thus, it’s not clear whether the treatment of trade in restoration plays became more positive over time. 
+
+<br/>
+
+
+### Data Visualization 2
+\
+
+#### Top 10 Characters
+
+The `ner_total_sentiment` dataframe allows us to chart the top 10 characters based on their positive and negative sentiments. 
+\
+\
+
+##### Positive Charcters
+
+```{r message=FALSE, fig.width=12, fig.height=8}
+
+ner_total_sentiment %>%
+  arrange(year) %>%
+  group_by(title) %>%
+  filter(kind == "person") %>%
+  top_n(10) %>% 
+  mutate(entity = reorder(entity, total)) %>% 
+  ggplot(aes(entity, y = total, fill = title)) +
+  geom_col() +
+  facet_wrap( ~ title, scales = "free") +
+  ggtitle("Top 10 Positive (Characters)") +
+  coord_flip()
+
+```
+\
+
+##### Negative Charcters
+
+```{r message=FALSE, fig.width=12, fig.height=8}
+
+ner_total_sentiment %>%
+  group_by(title) %>%
+  filter(kind == "person") %>%
+  top_n(-10) %>% 
+  mutate(entity = reorder(entity, desc(total))) %>% 
+  ggplot(aes(entity, y = total, fill = title)) +
+  geom_col() +
+  facet_wrap( ~ title, scales = "free") +
+  ggtitle("Top 10 Negative (Characters)") +
+  coord_flip()
+
+```
+
+<br/>
+
+We visualised the top ten positive and negative characters in every play. We then looked at the occupation of these characters to see how the merchant class was faring. Major positive characters in Amboyna belong to the merchant class. The protagonist Gabriel Towerson, both a ship captain and trader, is a positive character (positive factor 1). Isabinda (positive factor 1) , engaged to Towerson, is the daughter of merchants in India. The character ‘Beam’ is an english merchant whose positive factor is 1.
+
+<br/>
+
+#### Drawbacks
+
+ This visualization proved elusive and tedious when it came to drawing conclusions to support our hypothesis. Characters showing up on the visualisation had to be looked at individually in their context to figure out their occupation. These occupations aren’t well defined in the plays (characters are defined in terms of their relation to other characters instead, ex: son of governor etc.) and don’t cleanly divide themselves into either royalty or the merchant class. This means that some plays in the corpus couldn’t be factored into our analysis. Most women in the plays don’t have an occupation, however, some can be related to people in the merchant class. These relationships, though relevant to our analysis, are extremely hard to track.
+
+<br/>
+
+
+### Conclusion
+
+We feel that we weren’t able to prove our hypothesis sufficiently. The first visualisation, despite its drawback, supported the hypothesis well. However, executing the character-sentiment visualisation proved to be difficult. NLP had trouble picking out the characters from the plays, and had no way to tell how prominent the characters were. Predictably, the protagonists of every play had positive sentiments associated with them. Characters who had outright negative sentiment associated with them were much fewer. The sentiment analysis turned out to be misleading in a few cases: a minor character who appeared once in a positive context had a much higher positive factor than a major character who is present almost constantly throughout the play. This is probably because a character’s high presence means the positive and negative sentiments cancel out one another. 
+
+<br/>
+
+
+### Reflections
+
+Most of the plays are set in England and locations within the country have positive sentiments attached to them. This is not surprising as Restoration literature often glorifies Britain and the monarchy. France, Venice (and by extension, Italy), Portugal and Europe as a whole were associated with negative sentiments, which reinforces the idea that they were trade rivals with Britain. However, the idea of sentiment analysis turned out to be unreliable in some aspects. For example, in Dryden’s Amboyna, the Netherlands is a positive location which seems counterintuitive because the play is about “the cruelties of the Dutch to the English merchants”. 
+
+One of the bigger challenges we faced with our corpus was data cleaning. The raw data had a lot of errors that were hard to catch. Unusual names of characters like Foresight and Tattle couldn’t be detected or were coded as locations which we accidentally deleted and had to input later on. The occurrence of a character name in R was lower than its actual occurrence since the plays used name abbreviations before dialogues. So negative/positive analysis depends on the count of entrance and exit of a character from the scene. We encountered a bug where a character name from one play, Belvedira, was showing up in the data frame of most plays in our corpus. 
+
+Analysis in R allowed us to ask more in-depth questions about the corpus as opposed to Voyant where analysis depended largely on word analysis divorced from its context. While sentiment analysis opened up new avenues for us, we aren’t sure if it was the most appropriate visualization for our hypothesis.
+\
+\
