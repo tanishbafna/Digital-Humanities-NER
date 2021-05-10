@@ -21,3 +21,9 @@ Here’s a final list of the selected texts:
 8.  Aureng-zebe - Dryden
 9.  The Dutch Lover - Behn
 10. The Roundheads - Behn
+
+### The Code
+
+1.  Decompress all zip files
+2.  Open NER-NLP to see under the hood
+3.  The HTML Markdown is in the `docs` folder
