@@ -1,5 +1,7 @@
 # Digital-Humanities-NER
 
+https://tanishbafna.github.io/Digital-Humanities-NER/
+
 We were interested in looking at how the emerging merchant class in the restoration era (1660-1700s) exerted its presence in the literature, especially plays, of the time. Restoration literature was written in celebration of Charles II being restored to the throne. We wanted to examine whether there’s a connection between how characters are portrayed (positively or negatively) and their occupation to get a sense of how the merchant class is treated by the authors of the plays selected. Looking at how locations outside of England, especially places which were involved in trade, are portrayed gave us insight into how this emerging class was present in texts that celebrated the Stuart Line. A comparison between early and late restoration plays also gave us an idea on how the attitude towards the merchant class changed over this period.
 
 ### Research Hypothesis
@@ -27,3 +29,8 @@ Here’s a final list of the selected texts:
 1.  Decompress all zip files
 2.  Open NER-NLP to see under the hood
 3.  The HTML Markdown is in the `docs` folder
+
+### Acknowledgements
+
+* Professor Johannes Burgers, Ashoka Univeristy
+* Project Gutenberg
